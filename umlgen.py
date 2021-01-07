@@ -1,8 +1,10 @@
 import re
 
+_datatype_regex = r"\w+(?:\[\w*\])?"
+
 class_search = re.compile(r"(private|public|protected) class (\w+)[\n\s+\{]")
-vars_search = re.compile(r"(private|public|protected) +(static +)?(\w+) +([\w( *\, *)]+) *(\=[^;]*)?;")
-funcs_search = re.compile(r"(public|private|protected) (static )?([^\(\)\{\;\}\n ]* )?([^\(\)\{\;\}\n ]*)\(([^)]*)\)")
+vars_search = re.compile(r"(private|public|protected) +(static +)?("+_datatype_regex+r") +([\w( *\, *)]+) *(\=[^;]*)?;")
+funcs_search = re.compile(r"(public|private|protected) (static )?("+_datatype_regex+r" )?([^\(\)\{\;\}\n ]*)\(([^)]*)\)")
 
 from PIL import Image as Img
 from PIL import ImageDraw as Draw
