@@ -1,5 +1,5 @@
 #OBJS specifies which files to compile as part of the project
-OBJS = main.py 
+OBJS = umlgen.py 
 #CC specifies which compiler we're using
 CC = nuitka3
 #COMPILER_FLAGS specifies the additional compilation options we're using
