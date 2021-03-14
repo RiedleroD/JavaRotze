@@ -1,23 +1,24 @@
 import re
 
+_generic_regex = r"\<\w+\>"#matches a generic declaration
 _name_regex    = r"[^\W ]+"#matches one variable-, function-, or classname
-_datatype_regex= r"\w+(?:\[\])*"#matches one datatype (including arrays)
-_params_regex  = r" *(:?(final) +)?("+_datatype_regex+r") +("+_name_regex+r") *,? *"#matches one parameter in a function
+_datatype_regex= r"(?:[^\W ]|[\<\>])+(?:\[\])*"#matches one datatype (including arrays and generics)
+_params_regex  = r" *(?:(final) +)?("+_datatype_regex+r") +("+_name_regex+r") *,? *"#matches one parameter in a function
 #TODO: still works → func(int a int b) ← missing comma
 _state_regex   = r"(public|protected|private|package)"#matches a publicity state
-_generic_regex = r"\<\w+\>"
 
-class_search = re.compile(_state_regex+r" +class +("+_name_regex+r")[\n\s+\{]")
+class_search = re.compile(_state_regex+r" +class +("+_name_regex+r")(?: *("+_generic_regex+r"))?")
 vars_search  = re.compile(r"(?:(final) +)?"+_state_regex+r" +(?:(static) +)?("+_datatype_regex+r") +("+_name_regex+r") *(?:\= *([^;]*?) *)?;")
-funcs_search = re.compile(_state_regex+r" +(?:(static) +)?(?:("+_generic_regex+r") +)?(?:("+_datatype_regex+r") +)?("+_name_regex+") *\((("+_params_regex+r")*)\)")
+funcs_search = re.compile(_state_regex+r" +(?:(static) +)?(?:("+_generic_regex+r") *)?(?:("+_datatype_regex+r") +)?("+_name_regex+") *\((("+_params_regex+r")*)\)")
 params_search= re.compile(_params_regex)
-
-STATICCLASS=" class=\"static\""
 
 import gi
 gi.require_version("Gtk","3.0")
 from gi.repository import Gtk,Gio,GLib,Gdk,GdkPixbuf
 Gtk.init()
+
+def escape(txt:str)->str:
+	return txt.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
 class Status:
 	_dc_map=["public","protected","private","package"]
@@ -63,7 +64,7 @@ class Variable:
 		self.final=final
 		self.val=val;
 	def format(self,y):
-		return f"<text y=\"{y}\" x=\"5\">{self.status.format()}{self.format_name()}: {self.dtype}{self.format_val()}{self.format_final()}</text>"
+		return f"<text y=\"{y}\" x=\"5\">{self.status.format()}{self.format_name()}: {escape(self.dtype)}{self.format_val()}{self.format_final()}</text>"
 	def format_name(self):
 		if self.static:
 			return f"<tspan class=\"static\">{self.name}</tspan>"
@@ -102,7 +103,7 @@ class Parameter:
 		return len(self.name)+len(self.dtype)+2
 	@classmethod
 	def search(cls,txt:str):
-		return [cls(pr[2],pr[3],pr[1]=="final") for pr in params_search.findall(txt)]
+		return [cls(pr[1],pr[2],pr[0]=="final") for pr in params_search.findall(txt)]
 
 class Method:
 	def __init__(self,status:Status,static:bool,rtype:str,name:str,params:[Parameter],generic:str):
@@ -113,20 +114,18 @@ class Method:
 		self.params=params
 		self.generic=generic
 	def format(self,y):
-		return f"<text y=\"{y}\" x=\"5\">{self.status.format()}{self.format_generic()}{self.format_main()}{self.format_rtype()}</text>"
+		return f"<text y=\"{y}\" x=\"5\">{self.status.format()}{escape(self.generic)}{self.format_main()}{escape(self.format_rtype())}</text>"
 	def format_rtype(self):
 		if self.rtype and self.rtype!="void":
 			return ": "+self.rtype
 		else:
 			return ""
 	def format_main(self):
-		string=f"{self.name}({', '.join([p.format() for p in self.params])})";
+		string=f"{self.name}({', '.join([escape(p.format()) for p in self.params])})";
 		if self.static:
 			return f"<tspan class=\"static\">{string}</tspan>"
 		else:
 			return string
-	def format_generic(self):
-		return self.generic.replace(">","&gt;").replace("<","&lt;")
 	def format_simple(self):
 		return f"{self.status.format()}{self.generic}{self.format_main_simple()}{self.format_rtype()}"
 	def format_main_simple(self):
@@ -192,7 +191,6 @@ class MainWin(Gtk.Window):
 				"<style>.static{text-decoration:underline}text{font-size:10px}path{fill:#FFF;stroke:#000}</style>"\
 				f"<path d=\"M0.5 0v{height-0.5}h{width-1}v-{height-1}h-{width-1}M0.5 13.5h{width-1}M0.5 {15.5+len(vrs)*12}h{width-1}\"/>"\
 				f"{cls.format(10,width/2)}{''.join([obj.format(12+i*12) for i,obj in enumerate(vrs,1)])}{''.join([obj.format(13+i*12) for i,obj in enumerate(meths,len(vrs)+1)])}</svg>"
-		#TODO: simple text output
 		simple="\n\n".join("\n".join(obj.format_simple() for obj in objs) for objs in ((cls,),vrs,meths))
 		self.buf.set_text(simple,len(simple))
 		fp=fn+".svg"
