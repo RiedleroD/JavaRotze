@@ -1,63 +1,168 @@
 import re
 
-_datatype_regex = r"\w+(?:\[\w*\])?"
+_name_regex    = r"[^\W ]+"#matches one variable-, function-, or classname
+_datatype_regex= r"\w+(?:\[\])*"#matches one datatype (including arrays)
+_params_regex  = r" *(:?(final) +)?("+_datatype_regex+r") +("+_name_regex+r") *,? *"#matches one parameter in a function
+#TODO: still works → func(int a int b) ← missing comma
+_state_regex   = r"(public|protected|private|package)"#matches a publicity state
+_generic_regex = r"\<\w+\>"
 
-class_search = re.compile(r"(private|public|protected) class (\w+)[\n\s+\{]")
-vars_search = re.compile(r"(private|public|protected) +(static +)?("+_datatype_regex+r") +([\w( *\, *)]+) *(\=[^;]*)?;")
-funcs_search = re.compile(r"(public|private|protected) (static )?("+_datatype_regex+r" )?([^\(\)\{\;\}\n ]*)\(([^)]*)\)")
+class_search = re.compile(_state_regex+r" +class +("+_name_regex+r")[\n\s+\{]")
+vars_search  = re.compile(r"(?:(final) +)?"+_state_regex+r" +(?:(static) +)?("+_datatype_regex+r") +("+_name_regex+r") *(?:\= *([^;]*?) *)?;")
+funcs_search = re.compile(_state_regex+r" +(?:(static) +)?(?:("+_generic_regex+r") +)?(?:("+_datatype_regex+r") +)?("+_name_regex+") *\((("+_params_regex+r")*)\)")
+params_search= re.compile(_params_regex)
 
-from PIL import Image as Img
-from PIL import ImageDraw as Draw
-from PIL import ImageFont as Font
+STATICCLASS=" class=\"static\""
+
 import gi
-
 gi.require_version("Gtk","3.0")
-from gi.repository import Gtk
-Gtk.init()#because for some reason if nuitka is used, a bug in gtk is triggered that isn't considered a bug by the gtk devs…
+from gi.repository import Gtk,Gio,GLib,Gdk,GdkPixbuf
+Gtk.init()
+
+class Status:
+	_dc_map=["public","protected","private","package"]
+	_ec_map=['+','#','-','~','?']
+	def __init__(self,stat):
+		if type(stat)==int:
+			if 0<=stat<=4:
+				self.val=stat
+			else:
+				self.val=4
+		elif type(stat)==str:
+			self.val=self.stat2val(stat)
+	def format(self):
+		return self._ec_map[self.val]
+	@classmethod	
+	def stat2val(cls,status:str)->int:
+		if status in cls._dc_map:
+			return cls._dc_map.index(status)
+		else:
+			return 4
+
+class Klasse:
+	def __init__(self,status:Status,name:str):
+		self.name=name
+		self.status=status
+	def format(self,y,x):
+		return f"<text y=\"{y}\" x=\"{x}\" text-anchor=\"middle\">{self.status.format()}{self.name}</text>"
+	def format_simple(self):
+		return f"{self.status.format()}{self.name}"
+	def width(self):
+		return len(self.name)+1
+	@classmethod
+	def search(cls,txt:str):
+		kls=class_search.search(txt)
+		return cls(Status(kls[1]),kls[2])#TODO get multiple classes in one file
+
+class Variable:
+	def __init__(self,status:Status,static:bool,dtype:str,name:str,final:bool=False,val:str=None):
+		self.status=status
+		self.static=static
+		self.dtype=dtype
+		self.name=name
+		self.final=final
+		self.val=val;
+	def format(self,y):
+		return f"<text y=\"{y}\" x=\"5\">{self.status.format()}{self.format_name()}: {self.dtype}{self.format_val()}{self.format_final()}</text>"
+	def format_name(self):
+		if self.static:
+			return f"<tspan class=\"static\">{self.name}</tspan>"
+		else:
+			return self.name
+	def format_val(self):
+		if self.val:
+			return " = "+self.val
+		else:
+			return ""
+	def format_final(self):
+		if self.final:
+			return "{readOnly}"
+		else:
+			return ""
+	def format_simple(self):
+		return f"{self.status.format()}{self.format_name_simple()}: {self.dtype}{self.format_val()}{self.format_final()}"
+	def format_name_simple(self):
+		if self.static:
+			return f"_{self.name}_"
+		else:
+			return self.name
+	def width(self):
+		return len(self.name)+3+len(self.dtype)
+	@classmethod
+	def search(cls,txt:str):
+		return [cls(Status(vr[1]),vr[2]=="static",vr[3],vr[4],vr[0]=="final",vr[5]) for vr in vars_search.findall(txt)]
+
+class Parameter:
+	def __init__(self,dtype:str,name:str,final:bool=False):
+		self.dtype=dtype
+		self.name=name
+	def format(self):
+		return f"{self.name}: {self.dtype}"
+	def width(self):
+		return len(self.name)+len(self.dtype)+2
+	@classmethod
+	def search(cls,txt:str):
+		return [cls(pr[2],pr[3],pr[1]=="final") for pr in params_search.findall(txt)]
+
+class Method:
+	def __init__(self,status:Status,static:bool,rtype:str,name:str,params:[Parameter],generic:str):
+		self.status=status
+		self.static=static
+		self.rtype=rtype
+		self.name=name
+		self.params=params
+		self.generic=generic
+	def format(self,y):
+		return f"<text y=\"{y}\" x=\"5\">{self.status.format()}{self.format_generic()}{self.format_main()}{self.format_rtype()}</text>"
+	def format_rtype(self):
+		if self.rtype and self.rtype!="void":
+			return ": "+self.rtype
+		else:
+			return ""
+	def format_main(self):
+		string=f"{self.name}({', '.join([p.format() for p in self.params])})";
+		if self.static:
+			return f"<tspan class=\"static\">{string}</tspan>"
+		else:
+			return string
+	def format_generic(self):
+		return self.generic.replace(">","&gt;").replace("<","&lt;")
+	def format_simple(self):
+		return f"{self.status.format()}{self.generic}{self.format_main_simple()}{self.format_rtype()}"
+	def format_main_simple(self):
+		string=f"{self.name}({', '.join([p.format() for p in self.params])})";
+		if self.static:
+			return f"_{string}_"
+		else:
+			return string
+	def width(self):
+		return sum(param.width() for param in self.params)+(len(self.params)-1)*2+len(self.name)+(5 if self.rtype else 3)+len(self.rtype)
+	@classmethod
+	def search(cls,txt:str):
+		return [cls(Status(mt[0]),mt[1]=="static",mt[3],mt[4],Parameter.search(mt[5]),mt[2]) for mt in funcs_search.findall(txt)]
 
 def quit_for_good(widget):#this is also because nuitka triggers something idk
 	Gtk.main_quit()
-
-def format_params(params):
-	return ", ".join(": ".join(reversed(param.split(" "))) for param in params.split(",") if param.replace(" ",""))
-
-def format_return(ret):
-	if ret:
-		return f": {ret}"
-	else:
-		return ""
-
-def format_publicity(pub):
-	if pub=="public":
-		return "+"
-	elif pub=="protected":
-		return "#"
-	elif pub=="private":
-		return "-"
-	elif pub=="package":
-		return "~"
-	else:
-		return "?"
-def format_static(stat):
-	if "static" in stat:
-		return "\033[4m"
-	else:
-		return "\033[0m"
-
-def format_varnames(varnames):
-	return varnames.replace(" ","").replace(",",", ")
 
 class MainWin(Gtk.Window):
 	def __init__(self):
 		Gtk.Window.__init__(self, title="C# is net so sharp")
 		
 		self.box=Gtk.Box(spacing=2,orientation=Gtk.Orientation.VERTICAL,homogeneous=False)
-		self.add(self.box)
+		
+		self.viewbox=Gtk.Box(spacing=2,orientation=Gtk.Orientation.HORIZONTAL,homogeneous=False)
 		
 		self.tv=Gtk.TextView(editable=False,cursor_visible=False,left_margin=12,top_margin=8,right_margin=8)
 		self.buf=Gtk.TextBuffer()
 		self.tv.set_buffer(self.buf)
-		self.box.pack_start(self.tv,True,True,2)
+		self.viewbox.pack_start(self.tv,True,True,2)
+		
+		stream = Gio.MemoryInputStream.new_from_bytes(GLib.Bytes.new(b"<svg></svg>"))
+		pixbuf = GdkPixbuf.Pixbuf.new_from_stream(stream, None)
+		self.svgwidget = Gtk.Image.new_from_pixbuf(pixbuf)
+		self.viewbox.pack_start(self.svgwidget,True,True,2)
+		
+		self.box.pack_start(self.viewbox,True,True,2)
 		
 		self.fc=Gtk.FileChooserButton()
 		self.ff=Gtk.FileFilter()
@@ -65,47 +170,39 @@ class MainWin(Gtk.Window):
 		self.fc.add_filter(self.ff)
 		self.fc.connect("file-set",self.on_fileset)
 		self.box.pack_start(self.fc,False,True,0)
+		
+		self.add(self.box)
 	def on_fileset(self,widget):
 		fn=widget.get_filename()
-		thing=self.get_thing(fn)
-		while "\n\n\n" in thing:
-			thing=thing.replace("\n\n\n","\n\n")
-		print(thing)
-		stuff=thing.replace("\033[0m","\033[4m").replace("\033[4m","")
-		self.buf.set_text(stuff,len(stuff))
-		self.to_png(thing,fn+".png")
-	def to_png(self,thing,fn):
-		things=thing.split("\n")
-		try:
-			fnt=Font.truetype("arial.ttf",10)
-		except OSError:
-			fnt=Font.truetype("NimbusRoman-Regular.otf")
-		width=max(len(x) for x in things)*5+6
-		height=len(things)*11+6
-		img=Img.new(mode='RGB',size=(width,height),color=(255,255,255))
-		draw=Draw.Draw(img)
-		for i,line in enumerate(things):
-			if line:
-				if line[0]=="\033":
-					static=line[2]=="4"
-					line=line[4:]
-				else:
-					static=False
-				le,he=draw.textsize(line,font=fnt)
-				draw.text((3,3+i*11),line,font=fnt,fill=(0,0,0))
-				if static:
-					draw.line((3,3+he+i*11,3+le,3+he+i*11),fill=(0,0,0))
-			else:
-				draw.rectangle((0,5+i*11,width,8+i*11),fill=(0,0,0))
-		draw.rectangle((0,0,width-1,height-1),outline=(0,0,0),width=2)
-		img.save(fn)
-	def get_thing(self,fn):
 		with open(fn, 'r') as f:
 			txt = f.read()
-		cls=class_search.search(txt).group(2)
-		vrs="\n".join([f"{format_static(vr[1])}{format_publicity(vr[0])}{vr[3]}: {format_varnames(vr[2])}" for vr in vars_search.findall(txt)])
-		fncs="\n".join([f"{format_static(vr[1])}{format_publicity(vr[0])}{vr[3]}({format_params(vr[4])}){format_return(vr[2])}" for vr in funcs_search.findall(txt)])
-		return f"{cls}\n\n{vrs}\n\n{fncs}"
+		cls=Klasse.search(txt)
+		vrs=Variable.search(txt)
+		meths=Method.search(txt)
+		allobjs=(cls,*vrs,*meths)
+		maxwidth=0
+		for obj in allobjs:
+			width=obj.width()
+			if width>maxwidth:
+				maxwidth=width
+		width=5*maxwidth+10#assuming font-size:10px and that characters are roughly half as wide as they're tall
+		height=len(allobjs)*12+6
+		text=	f"<svg width=\"{width}\" height=\"{height}\" xmlns=\"http://www.w3.org/2000/svg\">"\
+				"<!--Created with umlgen by Riedler-->"\
+				"<style>.static{text-decoration:underline}text{font-size:10px}path{fill:#FFF;stroke:#000}</style>"\
+				f"<path d=\"M0.5 0v{height-0.5}h{width-1}v-{height-1}h-{width-1}M0.5 13.5h{width-1}M0.5 {15.5+len(vrs)*12}h{width-1}\"/>"\
+				f"{cls.format(10,width/2)}{''.join([obj.format(12+i*12) for i,obj in enumerate(vrs,1)])}{''.join([obj.format(13+i*12) for i,obj in enumerate(meths,len(vrs)+1)])}</svg>"
+		#TODO: simple text output
+		simple="\n\n".join("\n".join(obj.format_simple() for obj in objs) for objs in ((cls,),vrs,meths))
+		self.buf.set_text(simple,len(simple))
+		fp=fn+".svg"
+		with open(fp,"w+") as f:
+			f.write(text)
+		self.update_svgview(fp)
+	def update_svgview(self,fp):
+		rect=self.svgwidget.get_allocation()
+		buf=GdkPixbuf.Pixbuf.new_from_file_at_scale(fp,rect.width,rect.height,True)
+		self.svgwidget.set_from_pixbuf(buf)
 
 win=MainWin()
 win.connect("destroy",quit_for_good)
